@@ -129,7 +129,10 @@ def getBoundingBoxes(directory,
                      coordType,
                      allBoundingBoxes=None,
                      allClasses=None,
-                     imgSize=(0, 0)):
+                     imgSize=(0, 0),
+                     classesToConsider=None,
+                     num_cutoff_frames_start=0,
+                     num_cutoff_frames_stop=0):
     """Read txt files containing bounding boxes (ground truth and detections)."""
     if allBoundingBoxes is None:
         allBoundingBoxes = BoundingBoxes()
@@ -139,6 +142,12 @@ def getBoundingBoxes(directory,
     os.chdir(directory)
     files = glob.glob("*.txt")
     files.sort()
+    
+    # Cutoff frames
+    files = files[num_cutoff_frames_start:]
+    if num_cutoff_frames_stop > 0:
+        files = files[:(-1 * num_cutoff_frames_stop)]
+
     # Read GT detections from txt file
     # Each line of the files in the groundtruths folder represents a ground truth bounding box
     # (bounding boxes that a detector should detect)
@@ -161,6 +170,10 @@ def getBoundingBoxes(directory,
                 y = float(splitLine[2])
                 w = float(splitLine[3])
                 h = float(splitLine[4])
+                # If relative, convert x, y to center of bbox
+                if coordType == CoordinatesType.Relative:
+                    x += w / 2
+                    y += h / 2
                 bb = BoundingBox(nameOfImage,
                                  idClass,
                                  x,
@@ -179,6 +192,10 @@ def getBoundingBoxes(directory,
                 y = float(splitLine[3])
                 w = float(splitLine[4])
                 h = float(splitLine[5])
+                # If relative, convert x, y to center of bbox
+                if coordType == CoordinatesType.Relative:
+                    x += w / 2
+                    y += h / 2
                 bb = BoundingBox(nameOfImage,
                                  idClass,
                                  x,
@@ -190,229 +207,296 @@ def getBoundingBoxes(directory,
                                  BBType.Detected,
                                  confidence,
                                  format=bbFormat)
+            if classesToConsider is not None:
+                if idClass not in classesToConsider:
+                    continue
             allBoundingBoxes.addBoundingBox(bb)
             if idClass not in allClasses:
                 allClasses.append(idClass)
         fh1.close()
     return allBoundingBoxes, allClasses
 
+if __name__ == '__main__':
+    # Get current path to set default folders
+    currentPath = os.path.dirname(os.path.abspath(__file__))
 
-# Get current path to set default folders
-currentPath = os.path.dirname(os.path.abspath(__file__))
+    VERSION = '0.2 (beta)'
 
-VERSION = '0.2 (beta)'
+    with open('message.txt', 'r') as f:
+        message = f'\n\n{f.read()}\n\n'
 
-with open('message.txt', 'r') as f:
-    message = f'\n\n{f.read()}\n\n'
+    print(message)
 
-print(message)
+    parser = argparse.ArgumentParser(
+        prog='Object Detection Metrics - Pascal VOC',
+        description=
+        f'{message}\nThis project applies the most popular metrics used to evaluate object detection '
+        'algorithms.\nThe current implemention runs the Pascal VOC metrics.\nFor further references, '
+        'please check:\nhttps://github.com/rafaelpadilla/Object-Detection-Metrics',
+        epilog="Developed by: Rafael Padilla (rafael.padilla@smt.ufrj.br)")
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + VERSION)
+    # Positional arguments
+    # Mandatory
+    parser.add_argument('-gt',
+                        '--gtfolder',
+                        dest='gtFolder',
+                        default=os.path.join(currentPath, 'groundtruths'),
+                        metavar='',
+                        help='folder containing your ground truth bounding boxes')
+    parser.add_argument('-det',
+                        '--detfolder',
+                        dest='detFolder',
+                        default=os.path.join(currentPath, 'detections'),
+                        metavar='',
+                        help='folder containing your detected bounding boxes')
+    # Optional
+    parser.add_argument('-t',
+                        '--threshold',
+                        dest='iouThreshold',
+                        type=float,
+                        default=0.5,
+                        metavar='',
+                        help='IOU threshold. Default 0.5')
+    parser.add_argument('-gtformat',
+                        dest='gtFormat',
+                        metavar='',
+                        default='xywh',
+                        help='format of the coordinates of the ground truth bounding boxes: '
+                        '(\'xywh\': <left> <top> <width> <height>)'
+                        ' or (\'xyrb\': <left> <top> <right> <bottom>)')
+    parser.add_argument('-detformat',
+                        dest='detFormat',
+                        metavar='',
+                        default='xywh',
+                        help='format of the coordinates of the detected bounding boxes '
+                        '(\'xywh\': <left> <top> <width> <height>) '
+                        'or (\'xyrb\': <left> <top> <right> <bottom>)')
+    parser.add_argument('-gtcoords',
+                        dest='gtCoordinates',
+                        default='abs',
+                        metavar='',
+                        help='reference of the ground truth bounding box coordinates: absolute '
+                        'values (\'abs\') or relative to its image size (\'rel\')')
+    parser.add_argument('-detcoords',
+                        default='abs',
+                        dest='detCoordinates',
+                        metavar='',
+                        help='reference of the ground truth bounding box coordinates: '
+                        'absolute values (\'abs\') or relative to its image size (\'rel\')')
+    parser.add_argument('-imgsize',
+                        dest='imgSize',
+                        metavar='',
+                        help='image size. Required if -gtcoords or -detcoords are \'rel\'')
+    parser.add_argument('-sp',
+                        '--savepath',
+                        dest='savePath',
+                        metavar='',
+                        help='folder where the plots are saved')
+    parser.add_argument('-np',
+                        '--noplot',
+                        dest='showPlot',
+                        action='store_false',
+                        help='no plot is shown during execution')
+    parser.add_argument('--start-cutoff',
+                        dest='startCutoff',
+                        type=int,
+                        help='number of frames to remove from the start')
+    parser.add_argument('--max-frame-id',
+                        dest='maxFrameId',
+                        type=int,
+                        help='frames after this will not be considered')
+    parser.add_argument('--filter-for-common-images',
+                        dest='filterForCommonImages',
+                        action='store_true',
+                        help='keep bboxes from common images only')
+    parser.add_argument('--min-size',
+                        dest='minSize',
+                        type=int,
+                        help='min width or height of tracking boxes to use')
+    parser.add_argument('--classes-to-consider',
+                        dest='classesToConsider',
+                        nargs='+',
+                        type=str,
+                        help='labels of classes to include in mAP calculation')
+    args = parser.parse_args()
 
-parser = argparse.ArgumentParser(
-    prog='Object Detection Metrics - Pascal VOC',
-    description=
-    f'{message}\nThis project applies the most popular metrics used to evaluate object detection '
-    'algorithms.\nThe current implemention runs the Pascal VOC metrics.\nFor further references, '
-    'please check:\nhttps://github.com/rafaelpadilla/Object-Detection-Metrics',
-    epilog="Developed by: Rafael Padilla (rafael.padilla@smt.ufrj.br)")
-parser.add_argument('-v', '--version', action='version', version='%(prog)s ' + VERSION)
-# Positional arguments
-# Mandatory
-parser.add_argument('-gt',
-                    '--gtfolder',
-                    dest='gtFolder',
-                    default=os.path.join(currentPath, 'groundtruths'),
-                    metavar='',
-                    help='folder containing your ground truth bounding boxes')
-parser.add_argument('-det',
-                    '--detfolder',
-                    dest='detFolder',
-                    default=os.path.join(currentPath, 'detections'),
-                    metavar='',
-                    help='folder containing your detected bounding boxes')
-# Optional
-parser.add_argument('-t',
-                    '--threshold',
-                    dest='iouThreshold',
-                    type=float,
-                    default=0.5,
-                    metavar='',
-                    help='IOU threshold. Default 0.5')
-parser.add_argument('-gtformat',
-                    dest='gtFormat',
-                    metavar='',
-                    default='xywh',
-                    help='format of the coordinates of the ground truth bounding boxes: '
-                    '(\'xywh\': <left> <top> <width> <height>)'
-                    ' or (\'xyrb\': <left> <top> <right> <bottom>)')
-parser.add_argument('-detformat',
-                    dest='detFormat',
-                    metavar='',
-                    default='xywh',
-                    help='format of the coordinates of the detected bounding boxes '
-                    '(\'xywh\': <left> <top> <width> <height>) '
-                    'or (\'xyrb\': <left> <top> <right> <bottom>)')
-parser.add_argument('-gtcoords',
-                    dest='gtCoordinates',
-                    default='abs',
-                    metavar='',
-                    help='reference of the ground truth bounding box coordinates: absolute '
-                    'values (\'abs\') or relative to its image size (\'rel\')')
-parser.add_argument('-detcoords',
-                    default='abs',
-                    dest='detCoordinates',
-                    metavar='',
-                    help='reference of the ground truth bounding box coordinates: '
-                    'absolute values (\'abs\') or relative to its image size (\'rel\')')
-parser.add_argument('-imgsize',
-                    dest='imgSize',
-                    metavar='',
-                    help='image size. Required if -gtcoords or -detcoords are \'rel\'')
-parser.add_argument('-sp',
-                    '--savepath',
-                    dest='savePath',
-                    metavar='',
-                    help='folder where the plots are saved')
-parser.add_argument('-np',
-                    '--noplot',
-                    dest='showPlot',
-                    action='store_false',
-                    help='no plot is shown during execution')
-args = parser.parse_args()
+    iouThreshold = args.iouThreshold
 
-iouThreshold = args.iouThreshold
-
-# Arguments validation
-errors = []
-# Validate formats
-gtFormat = ValidateFormats(args.gtFormat, '-gtformat', errors)
-detFormat = ValidateFormats(args.detFormat, '-detformat', errors)
-# Groundtruth folder
-if ValidateMandatoryArgs(args.gtFolder, '-gt/--gtfolder', errors):
-    gtFolder = ValidatePaths(args.gtFolder, '-gt/--gtfolder', errors)
-else:
-    # errors.pop()
-    gtFolder = os.path.join(currentPath, 'groundtruths')
-    if os.path.isdir(gtFolder) is False:
-        errors.append('folder %s not found' % gtFolder)
-# Coordinates types
-gtCoordType = ValidateCoordinatesTypes(args.gtCoordinates, '-gtCoordinates', errors)
-detCoordType = ValidateCoordinatesTypes(args.detCoordinates, '-detCoordinates', errors)
-imgSize = (0, 0)
-if gtCoordType == CoordinatesType.Relative:  # Image size is required
-    imgSize = ValidateImageSize(args.imgSize, '-imgsize', '-gtCoordinates', errors)
-if detCoordType == CoordinatesType.Relative:  # Image size is required
-    imgSize = ValidateImageSize(args.imgSize, '-imgsize', '-detCoordinates', errors)
-# Detection folder
-if ValidateMandatoryArgs(args.detFolder, '-det/--detfolder', errors):
-    detFolder = ValidatePaths(args.detFolder, '-det/--detfolder', errors)
-else:
-    # errors.pop()
-    detFolder = os.path.join(currentPath, 'detections')
-    if os.path.isdir(detFolder) is False:
-        errors.append('folder %s not found' % detFolder)
-if args.savePath is not None:
-    savePath = ValidatePaths(args.savePath, '-sp/--savepath', errors)
-else:
-    savePath = os.path.join(currentPath, 'results')
-# Validate savePath
-# If error, show error messages
-if len(errors) != 0:
-    print("""usage: Object Detection Metrics [-h] [-v] [-gt] [-det] [-t] [-gtformat]
-                                [-detformat] [-save]""")
-    print('Object Detection Metrics: error(s): ')
-    [print(e) for e in errors]
-    sys.exit()
-
-# Check if path to save results already exists and is not empty
-if os.path.isdir(savePath) and os.listdir(savePath):
-    key_pressed = ''
-    while key_pressed.upper() not in ['Y', 'N']:
-        print(f'Folder {savePath} already exists and may contain important results.\n')
-        print(f'Enter \'Y\' to continue. WARNING: THIS WILL REMOVE ALL THE CONTENTS OF THE FOLDER!')
-        print(f'Or enter \'N\' to abort and choose another folder to save the results.')
-        key_pressed = input('')
-
-    if key_pressed.upper() == 'N':
-        print('Process canceled')
+    # Arguments validation
+    errors = []
+    # Validate formats
+    gtFormat = ValidateFormats(args.gtFormat, '-gtformat', errors)
+    detFormat = ValidateFormats(args.detFormat, '-detformat', errors)
+    # Groundtruth folder
+    if ValidateMandatoryArgs(args.gtFolder, '-gt/--gtfolder', errors):
+        gtFolder = ValidatePaths(args.gtFolder, '-gt/--gtfolder', errors)
+    else:
+        # errors.pop()
+        gtFolder = os.path.join(currentPath, 'groundtruths')
+        if os.path.isdir(gtFolder) is False:
+            errors.append('folder %s not found' % gtFolder)
+    # Coordinates types
+    gtCoordType = ValidateCoordinatesTypes(args.gtCoordinates, '-gtCoordinates', errors)
+    detCoordType = ValidateCoordinatesTypes(args.detCoordinates, '-detCoordinates', errors)
+    imgSize = (0, 0)
+    if gtCoordType == CoordinatesType.Relative:  # Image size is required
+        imgSize = ValidateImageSize(args.imgSize, '-imgsize', '-gtCoordinates', errors)
+    if detCoordType == CoordinatesType.Relative:  # Image size is required
+        imgSize = ValidateImageSize(args.imgSize, '-imgsize', '-detCoordinates', errors)
+    # Detection folder
+    if ValidateMandatoryArgs(args.detFolder, '-det/--detfolder', errors):
+        detFolder = ValidatePaths(args.detFolder, '-det/--detfolder', errors)
+    else:
+        # errors.pop()
+        detFolder = os.path.join(currentPath, 'detections')
+        if os.path.isdir(detFolder) is False:
+            errors.append('folder %s not found' % detFolder)
+    if args.savePath is not None:
+        try:
+            os.makedirs(args.savePath)
+        except FileExistsError:
+            pass
+        savePath = ValidatePaths(args.savePath, '-sp/--savepath', errors)
+    else:
+        savePath = os.path.join(currentPath, 'results')
+    # Validate savePath
+    # If error, show error messages
+    if len(errors) != 0:
+        print("""usage: Object Detection Metrics [-h] [-v] [-gt] [-det] [-t] [-gtformat]
+                                    [-detformat] [-save]""")
+        print('Object Detection Metrics: error(s): ')
+        [print(e) for e in errors]
         sys.exit()
 
-# Clear folder and save results
-shutil.rmtree(savePath, ignore_errors=True)
-os.makedirs(savePath)
-# Show plot during execution
-showPlot = args.showPlot
+    # # Check if path to save results already exists and is not empty
+    # if os.path.isdir(savePath) and os.listdir(savePath):
+    #     key_pressed = ''
+    #     while key_pressed.upper() not in ['Y', 'N']:
+    #         print(f'Folder {savePath} already exists and may contain important results.\n')
+    #         print(f'Enter \'Y\' to continue. WARNING: THIS WILL REMOVE ALL THE CONTENTS OF THE FOLDER!')
+    #         print(f'Or enter \'N\' to abort and choose another folder to save the results.')
+    #         key_pressed = input('')
 
-# print('iouThreshold= %f' % iouThreshold)
-# print('savePath = %s' % savePath)
-# print('gtFormat = %s' % gtFormat)
-# print('detFormat = %s' % detFormat)
-# print('gtFolder = %s' % gtFolder)
-# print('detFolder = %s' % detFolder)
-# print('gtCoordType = %s' % gtCoordType)
-# print('detCoordType = %s' % detCoordType)
-# print('showPlot %s' % showPlot)
+    #     if key_pressed.upper() == 'N':
+    #         print('Process canceled')
+    #         sys.exit()
 
-# Get groundtruth boxes
-allBoundingBoxes, allClasses = getBoundingBoxes(gtFolder,
-                                                True,
-                                                gtFormat,
-                                                gtCoordType,
-                                                imgSize=imgSize)
-# Get detected boxes
-allBoundingBoxes, allClasses = getBoundingBoxes(detFolder,
-                                                False,
-                                                detFormat,
-                                                detCoordType,
-                                                allBoundingBoxes,
-                                                allClasses,
-                                                imgSize=imgSize)
-allClasses.sort()
+    # Clear folder and save results
+    # shutil.rmtree(savePath, ignore_errors=True)
+    # os.makedirs(savePath)
+    # Show plot during execution
+    showPlot = args.showPlot
 
-evaluator = Evaluator()
-acc_AP = 0
-validClasses = 0
+    # print('iouThreshold= %f' % iouThreshold)
+    # print('savePath = %s' % savePath)
+    # print('gtFormat = %s' % gtFormat)
+    # print('detFormat = %s' % detFormat)
+    # print('gtFolder = %s' % gtFolder)
+    # print('detFolder = %s' % detFolder)
+    # print('gtCoordType = %s' % gtCoordType)
+    # print('detCoordType = %s' % detCoordType)
+    # print('showPlot %s' % showPlot)
 
-# Plot Precision x Recall curve
-detections = evaluator.PlotPrecisionRecallCurve(
-    allBoundingBoxes,  # Object containing all bounding boxes (ground truths and detections)
-    IOUThreshold=iouThreshold,  # IOU threshold
-    method=MethodAveragePrecision.EveryPointInterpolation,
-    showAP=True,  # Show Average Precision in the title of the plot
-    showInterpolatedPrecision=False,  # Don't plot the interpolated precision curve
-    savePath=savePath,
-    showGraphic=showPlot)
+    # Get groundtruth boxes
+    allBoundingBoxes, allClasses = getBoundingBoxes(gtFolder,
+                                                    True,
+                                                    gtFormat,
+                                                    gtCoordType,
+                                                    imgSize=imgSize,
+                                                    classesToConsider=args.classesToConsider)
+    # Get detected boxes
+    allBoundingBoxes, allClasses = getBoundingBoxes(detFolder,
+                                                    False,
+                                                    detFormat,
+                                                    detCoordType,
+                                                    allBoundingBoxes,
+                                                    allClasses,
+                                                    imgSize=imgSize,
+                                                    classesToConsider=args.classesToConsider)
 
-f = open(os.path.join(savePath, 'results.txt'), 'w')
-f.write('Object Detection Metrics\n')
-f.write('https://github.com/rafaelpadilla/Object-Detection-Metrics\n\n\n')
-f.write('Average Precision (AP), Precision and Recall per class:')
+    # Filter
+    if args.startCutoff is not None:
+        tmp = BoundingBoxes()
+        for bbox in allBoundingBoxes.getBoundingBoxes():
+            if int(bbox.getImageName()) >= args.startCutoff:
+                tmp.addBoundingBox(bbox)
+        allBoundingBoxes = tmp
+    if args.maxFrameId is not None:
+        tmp = BoundingBoxes()
+        for bbox in allBoundingBoxes.getBoundingBoxes():
+            if int(bbox.getImageName()) < args.maxFrameId:
+                tmp.addBoundingBox(bbox)
+        allBoundingBoxes = tmp
+    if args.filterForCommonImages:
+        gtImgArr = [os.path.splitext(os.path.basename(f))[0]
+                    for f in glob.glob(os.path.join(args.gtFolder, '*.txt'))]
+        detImgArr = [os.path.splitext(os.path.basename(f))[0]
+                     for f in glob.glob(os.path.join(args.detFolder, '*.txt'))]
+        commonImgSet = set(gtImgArr) & set(detImgArr)
+        tmp = BoundingBoxes()
+        for bbox in allBoundingBoxes.getBoundingBoxes():
+            if bbox.getImageName() in commonImgSet:
+                tmp.addBoundingBox(bbox)
+        allBoundingBoxes = tmp
+    if args.minSize is not None:
+        tmp = BoundingBoxes()
+        for bbox in allBoundingBoxes.getBoundingBoxes():
+            _, _, w, h = bbox.getAbsoluteBoundingBox()
+            if w >= args.minSize and h >= args.minSize:
+                tmp.addBoundingBox(bbox)
+        allBoundingBoxes = tmp
 
-# each detection is a class
-for metricsPerClass in detections:
+    allClasses.sort()
 
-    # Get metric values per each class
-    cl = metricsPerClass['class']
-    ap = metricsPerClass['AP']
-    precision = metricsPerClass['precision']
-    recall = metricsPerClass['recall']
-    totalPositives = metricsPerClass['total positives']
-    total_TP = metricsPerClass['total TP']
-    total_FP = metricsPerClass['total FP']
+    evaluator = Evaluator()
+    acc_AP = 0
+    validClasses = 0
 
-    if totalPositives > 0:
-        validClasses = validClasses + 1
-        acc_AP = acc_AP + ap
-        prec = ['%.2f' % p for p in precision]
-        rec = ['%.2f' % r for r in recall]
-        ap_str = "{0:.2f}%".format(ap * 100)
-        # ap_str = "{0:.4f}%".format(ap * 100)
-        print('AP: %s (%s)' % (ap_str, cl))
-        f.write('\n\nClass: %s' % cl)
-        f.write('\nAP: %s' % ap_str)
-        f.write('\nPrecision: %s' % prec)
-        f.write('\nRecall: %s' % rec)
+    # Plot Precision x Recall curve
+    detections = evaluator.PlotPrecisionRecallCurve(
+        allBoundingBoxes,  # Object containing all bounding boxes (ground truths and detections)
+        IOUThreshold=iouThreshold,  # IOU threshold
+        method=MethodAveragePrecision.EveryPointInterpolation,
+        showAP=True,  # Show Average Precision in the title of the plot
+        showInterpolatedPrecision=False,  # Don't plot the interpolated precision curve
+        savePath=savePath,
+        showGraphic=showPlot)
 
-mAP = acc_AP / validClasses
-mAP_str = "{0:.2f}%".format(mAP * 100)
-print('mAP: %s' % mAP_str)
-f.write('\n\n\nmAP: %s' % mAP_str)
+    f = open(os.path.join(savePath, 'results.txt'), 'w')
+    f.write('Object Detection Metrics\n')
+    f.write('https://github.com/rafaelpadilla/Object-Detection-Metrics\n\n\n')
+    f.write('Average Precision (AP), Precision and Recall per class:')
+
+    # each detection is a class
+    for metricsPerClass in detections:
+
+        # Get metric values per each class
+        cl = metricsPerClass['class']
+        ap = metricsPerClass['AP']
+        precision = metricsPerClass['precision']
+        recall = metricsPerClass['recall']
+        totalPositives = metricsPerClass['total positives']
+        total_TP = metricsPerClass['total TP']
+        total_FP = metricsPerClass['total FP']
+
+        if totalPositives > 0:
+            validClasses = validClasses + 1
+            acc_AP = acc_AP + ap
+            prec = ['%.2f' % p for p in precision]
+            rec = ['%.2f' % r for r in recall]
+            ap_str = "{0:.2f}%".format(ap * 100)
+            # ap_str = "{0:.4f}%".format(ap * 100)
+            print('AP: %s (%s)' % (ap_str, cl))
+            f.write('\n\nClass: %s' % cl)
+            f.write('\nAP: %s' % ap_str)
+            f.write('\nPrecision: %s' % prec)
+            f.write('\nRecall: %s' % rec)
+
+    if validClasses > 0:
+        mAP = acc_AP / validClasses
+    else:
+        mAP = 0.0
+    mAP_str = "{0:.2f}%".format(mAP * 100)
+    print('mAP: %s' % mAP_str)
+    f.write('\n\n\nmAP: %s' % mAP_str)
+    f.close()
